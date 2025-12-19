@@ -1,3 +1,4 @@
+// server.js
 import express from "express";
 import crypto from "crypto";
 
@@ -6,14 +7,12 @@ app.use(express.json({ limit: "1mb" }));
 
 const PORT = process.env.PORT || 3000;
 
-// Required env
-const PROXY_TOKEN = (process.env.PROXY_TOKEN || "").trim();
-
 // Upstreams
 const BYBIT_MAINNET = "https://api.bybit.com";
-const BYBIT_TESTNET = "https://api-demo-testnet.bybit.com";
+// Updated testnet URL
+const BYBIT_TESTNET = "https://api-demo.bybit.com";
 
-// Keys for each environment
+// Keys for each environment (still from env vars)
 const MAIN_KEY = (process.env.BYBIT_MAINNET_API_KEY || "").trim();
 const MAIN_SECRET = (process.env.BYBIT_MAINNET_SECRET || "").trim();
 const TESTNET_KEY = (process.env.BYBIT_DEMO_API_KEY || "").trim();
@@ -21,11 +20,8 @@ const TESTNET_SECRET = (process.env.BYBIT_DEMO_SECRET || "").trim();
 
 const RECV_WINDOW = (process.env.BYBIT_RECV_WINDOW || "5000").trim();
 
+// No proxy token – always allow
 function mustAuth(req, res) {
-  if (!PROXY_TOKEN) return res.status(500).json({ error: "PROXY_TOKEN not set" });
-
-  const presented = (req.header("X-PROXY-TOKEN") || "").trim();
-  if (presented !== PROXY_TOKEN) return res.status(401).json({ error: "Unauthorized" });
   return null;
 }
 
