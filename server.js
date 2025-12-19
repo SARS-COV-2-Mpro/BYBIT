@@ -9,10 +9,9 @@ const PORT = process.env.PORT || 3000;
 
 // Upstreams
 const BYBIT_MAINNET = "https://api.bybit.com";
-// Updated testnet URL
-const BYBIT_TESTNET = "https://api-demo.bybit.com";
+const BYBIT_TESTNET = "https://api-demo.bybit.com"; // testnet/demo env
 
-// Keys for each environment (still from env vars)
+// Keys for each environment (optional)
 const MAIN_KEY = (process.env.BYBIT_MAINNET_API_KEY || "").trim();
 const MAIN_SECRET = (process.env.BYBIT_MAINNET_SECRET || "").trim();
 const TESTNET_KEY = (process.env.BYBIT_DEMO_API_KEY || "").trim();
@@ -25,13 +24,20 @@ function mustAuth(req, res) {
   return null;
 }
 
+// Do NOT throw if keys missing; just return baseUrl and (maybe) keys
 function credsFor(env) {
   if (env === "mainnet") {
-    if (!MAIN_KEY || !MAIN_SECRET) throw new Error("Mainnet keys missing in env");
-    return { baseUrl: BYBIT_MAINNET, apiKey: MAIN_KEY, secret: MAIN_SECRET };
+    return {
+      baseUrl: BYBIT_MAINNET,
+      apiKey: MAIN_KEY || null,
+      secret: MAIN_SECRET || null
+    };
   }
-  if (!TESTNET_KEY || !TESTNET_SECRET) throw new Error("Testnet keys missing in env");
-  return { baseUrl: BYBIT_TESTNET, apiKey: TESTNET_KEY, secret: TESTNET_SECRET };
+  return {
+    baseUrl: BYBIT_TESTNET,
+    apiKey: TESTNET_KEY || null,
+    secret: TESTNET_SECRET || null
+  };
 }
 
 function signBybit({ timestamp, apiKey, secret, recvWindow, payload }) {
@@ -39,23 +45,27 @@ function signBybit({ timestamp, apiKey, secret, recvWindow, payload }) {
   return crypto.createHmac("sha256", secret).update(signStr).digest("hex");
 }
 
+// If apiKey/secret missing, send request WITHOUT auth headers (public call)
 async function forwardToBybit({ method, url, apiKey, secret, payload, bodyJson }) {
-  const timestamp = Date.now().toString();
-  const signature = signBybit({
-    timestamp,
-    apiKey,
-    secret,
-    recvWindow: RECV_WINDOW,
-    payload
-  });
-
   const headers = {
-    "X-BAPI-API-KEY": apiKey,
-    "X-BAPI-TIMESTAMP": timestamp,
-    "X-BAPI-SIGN": signature,
-    "X-BAPI-RECV-WINDOW": RECV_WINDOW,
     "Content-Type": "application/json"
   };
+
+  if (apiKey && secret) {
+    const timestamp = Date.now().toString();
+    const signature = signBybit({
+      timestamp,
+      apiKey,
+      secret,
+      recvWindow: RECV_WINDOW,
+      payload
+    });
+
+    headers["X-BAPI-API-KEY"] = apiKey;
+    headers["X-BAPI-TIMESTAMP"] = timestamp;
+    headers["X-BAPI-SIGN"] = signature;
+    headers["X-BAPI-RECV-WINDOW"] = RECV_WINDOW;
+  }
 
   const opts = { method, headers };
   if (method !== "GET") opts.body = bodyJson;
