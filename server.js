@@ -1,156 +1,99 @@
 // server.js
 import express from "express";
-import crypto from "crypto";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+app.use(express.text({ type: "*/*", limit: "1mb" }));
 
 const PORT = process.env.PORT || 3000;
 
 // Upstreams
 const BYBIT_MAINNET = "https://api.bybit.com";
-const BYBIT_TESTNET = "https://api-demo-testnet.bybit.com"; // <-- updated as you want
-
-// Keys for each environment (optional)
-const MAIN_KEY = (process.env.BYBIT_MAINNET_API_KEY || "").trim();
-const MAIN_SECRET = (process.env.BYBIT_MAINNET_SECRET || "").trim();
-const TESTNET_KEY = (process.env.BYBIT_DEMO_API_KEY || "").trim();
-const TESTNET_SECRET = (process.env.BYBIT_DEMO_SECRET || "").trim();
-
-const RECV_WINDOW = (process.env.BYBIT_RECV_WINDOW || "5000").trim();
-
-// No proxy token – always allow
-function mustAuth(req, res) {
-  return null;
-}
-
-// Do NOT throw if keys missing; just return baseUrl and optional keys
-function credsFor(env) {
-  if (env === "mainnet") {
-    return {
-      baseUrl: BYBIT_MAINNET,
-      apiKey: MAIN_KEY || null,
-      secret: MAIN_SECRET || null
-    };
-  }
-  return {
-    baseUrl: BYBIT_TESTNET,
-    apiKey: TESTNET_KEY || null,
-    secret: TESTNET_SECRET || null
-  };
-}
-
-function signBybit({ timestamp, apiKey, secret, recvWindow, payload }) {
-  const signStr = `${timestamp}${apiKey}${recvWindow}${payload}`;
-  return crypto.createHmac("sha256", secret).update(signStr).digest("hex");
-}
-
-// If apiKey/secret missing, send request WITHOUT auth headers (public call)
-async function forwardToBybit({ method, url, apiKey, secret, payload, bodyJson }) {
-  const headers = {
-    "Content-Type": "application/json"
-  };
-
-  if (apiKey && secret) {
-    const timestamp = Date.now().toString();
-    const signature = signBybit({
-      timestamp,
-      apiKey,
-      secret,
-      recvWindow: RECV_WINDOW,
-      payload
-    });
-
-    headers["X-BAPI-API-KEY"] = apiKey;
-    headers["X-BAPI-TIMESTAMP"] = timestamp;
-    headers["X-BAPI-SIGN"] = signature;
-    headers["X-BAPI-RECV-WINDOW"] = RECV_WINDOW;
-  }
-
-  const opts = { method, headers };
-  if (method !== "GET") opts.body = bodyJson;
-
-  const r = await fetch(url, opts);
-  const text = await r.text();
-
-  return { status: r.status, text };
-}
+const BYBIT_TESTNET = "https://api-demo-testnet.bybit.com";
 
 // Health
 app.get("/health", (req, res) => res.json({ ok: true }));
 
 /**
- * Mainnet proxy:
- *  - GET  /mainnet/v5/market/time
- *  - POST /mainnet/v5/order/create
+ * Universal proxy handler - forwards ALL headers and body
  */
-app.all("/mainnet/*", async (req, res) => {
-  const authFail = mustAuth(req, res);
-  if (authFail) return;
-
+async function proxyToBybit(req, res, baseUrl, prefix) {
   try {
-    const { baseUrl, apiKey, secret } = credsFor("mainnet");
-
-    const path = req.originalUrl.replace(/^\/mainnet/, "");
-    const [pathname, qs = ""] = path.split("?");
-    const url = `${baseUrl}${pathname}${qs ? `?${qs}` : ""}`;
+    // Build target URL
+    const path = req.originalUrl.replace(new RegExp(`^/${prefix}`), "");
+    const url = `${baseUrl}${path}`;
 
     const method = req.method.toUpperCase();
 
-    let payload = "";
-    let bodyJson = "";
+    // Forward ALL relevant headers
+    const headers = {};
 
-    if (method === "GET") {
-      payload = qs || "";
-    } else {
-      bodyJson = JSON.stringify(req.body ?? {});
-      payload = bodyJson;
+    // Bybit auth headers (case-insensitive lookup)
+    const headersToCopy = [
+      'x-bapi-api-key',
+      'x-bapi-timestamp',
+      'x-bapi-sign',
+      'x-bapi-recv-window',
+      'content-type',
+      'accept',
+      'accept-language',
+      'cache-control'
+    ];
+
+    for (const h of headersToCopy) {
+      const value = req.headers[h] || req.headers[h.toUpperCase()] || req.get(h);
+      if (value) {
+        // Convert to proper Bybit header format
+        if (h === 'x-bapi-api-key') headers['X-BAPI-API-KEY'] = value;
+        else if (h === 'x-bapi-timestamp') headers['X-BAPI-TIMESTAMP'] = value;
+        else if (h === 'x-bapi-sign') headers['X-BAPI-SIGN'] = value;
+        else if (h === 'x-bapi-recv-window') headers['X-BAPI-RECV-WINDOW'] = value;
+        else headers[h] = value;
+      }
     }
 
-    const out = await forwardToBybit({ method, url, apiKey, secret, payload, bodyJson });
+    // Always set content-type for POST
+    if (!headers['content-type'] && method !== 'GET') {
+      headers['Content-Type'] = 'application/json';
+    }
 
-    const ct = out.text.trim().startsWith("{") ? "application/json" : "text/html";
-    res.status(out.status).set("Content-Type", ct).send(out.text);
+    // User-Agent to avoid blocks
+    headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+    // Build request options
+    const opts = { method, headers };
+
+    // Forward body for non-GET requests
+    if (method !== 'GET' && method !== 'HEAD') {
+      if (typeof req.body === 'object') {
+        opts.body = JSON.stringify(req.body);
+      } else if (req.body) {
+        opts.body = req.body;
+      }
+    }
+
+    // Make request to Bybit
+    const response = await fetch(url, opts);
+    const text = await response.text();
+
+    // Forward response back
+    const contentType = text.trim().startsWith("{") ? "application/json" : "text/html";
+    res.status(response.status).set("Content-Type", contentType).send(text);
+
   } catch (e) {
+    console.error(`[proxy] Error:`, e?.message || e);
     res.status(500).json({ error: e?.message || String(e) });
   }
-});
+}
 
 /**
- * Testnet proxy:
- *  - GET  /testnet/v5/market/time
- *  - POST /testnet/v5/order/create
+ * Mainnet proxy: /mainnet/*
  */
-app.all("/testnet/*", async (req, res) => {
-  const authFail = mustAuth(req, res);
-  if (authFail) return;
+app.all("/mainnet/*", (req, res) => proxyToBybit(req, res, BYBIT_MAINNET, "mainnet"));
 
-  try {
-    const { baseUrl, apiKey, secret } = credsFor("testnet");
-
-    const path = req.originalUrl.replace(/^\/testnet/, "");
-    const [pathname, qs = ""] = path.split("?");
-    const url = `${baseUrl}${pathname}${qs ? `?${qs}` : ""}`;
-
-    const method = req.method.toUpperCase();
-
-    let payload = "";
-    let bodyJson = "";
-
-    if (method === "GET") {
-      payload = qs || "";
-    } else {
-      bodyJson = JSON.stringify(req.body ?? {});
-      payload = bodyJson;
-    }
-
-    const out = await forwardToBybit({ method, url, apiKey, secret, payload, bodyJson });
-
-    const ct = out.text.trim().startsWith("{") ? "application/json" : "text/html";
-    res.status(out.status).set("Content-Type", ct).send(out.text);
-  } catch (e) {
-    res.status(500).json({ error: e?.message || String(e) });
-  }
-});
+/**
+ * Testnet proxy: /testnet/*
+ */
+app.all("/testnet/*", (req, res) => proxyToBybit(req, res, BYBIT_TESTNET, "testnet"));
 
 app.listen(PORT, () => console.log(`Bybit proxy listening on :${PORT}`));
