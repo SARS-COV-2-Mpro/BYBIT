@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 
 // Upstreams
 const BYBIT_MAINNET = "https://api.bybit.com";
-const BYBIT_TESTNET = "https://api-demo.bybit.com"; // testnet/demo env
+const BYBIT_TESTNET = "https://api-demo-testnet.bybit.com"; // <-- updated as you want
 
 // Keys for each environment (optional)
 const MAIN_KEY = (process.env.BYBIT_MAINNET_API_KEY || "").trim();
@@ -24,7 +24,7 @@ function mustAuth(req, res) {
   return null;
 }
 
-// Do NOT throw if keys missing; just return baseUrl and (maybe) keys
+// Do NOT throw if keys missing; just return baseUrl and optional keys
 function credsFor(env) {
   if (env === "mainnet") {
     return {
